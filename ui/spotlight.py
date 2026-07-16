@@ -1,5 +1,12 @@
+import logging
+
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QLabel, QScrollArea
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+
+from logging_setup import setup_logging
+
+setup_logging()
+logger = logging.getLogger("overlay_assistant.ui.spotlight")
 
 
 class Spotlight(QWidget):
@@ -8,8 +15,12 @@ class Spotlight(QWidget):
     query_submitted = pyqtSignal(str)
     dismissed = pyqtSignal()
 
+    # Used to log only once per streamed response.
+    _logged_stream_start: bool
+
     def __init__(self):
         super().__init__()
+        self._logged_stream_start = False
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -56,12 +67,15 @@ class Spotlight(QWidget):
     def _on_submit(self):
         text = self.input.text().strip()
         if text:
+            logger.info("Spotlight submit (len=%s)", len(text))
             self.query_submitted.emit(text)
             self.input.clear()
 
     def open_at(self, x: int, y: int, screen_geometry=None):
+        self._logged_stream_start = False
         self.summary_label.setText("...")
         self.adjustSize()
+        logger.info("Spotlight open_at x=%s y=%s", x, y)
 
         if screen_geometry is not None:
             margin = 12
@@ -82,6 +96,10 @@ class Spotlight(QWidget):
     def append_summary_token(self, token: str):
         if self.summary_label.text() == "...":
             self.summary_label.setText("")
+            if not self._logged_stream_start:
+                logger.info("Spotlight streaming started")
+                self._logged_stream_start = True
+
         self.summary_label.setText(self.summary_label.text() + token)
         
         # Dynamically expand the window height as new text streams in
@@ -93,5 +111,6 @@ class Spotlight(QWidget):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
+            logger.info("Spotlight dismissed via Escape")
             self.hide()
             self.dismissed.emit()

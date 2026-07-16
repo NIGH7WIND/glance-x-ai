@@ -1,6 +1,13 @@
-from PyQt6.QtWidgets import QWidget
+import logging
+
 from PyQt6.QtCore import Qt, QRect, pyqtSignal
-from PyQt6.QtGui import QPainter, QColor, QPen
+from PyQt6.QtGui import QColor, QPainter, QPen
+from PyQt6.QtWidgets import QWidget
+
+from logging_setup import setup_logging
+
+setup_logging()
+logger = logging.getLogger("overlay_assistant.ui.drag_overlay")
 
 
 class DragOverlay(QWidget):
@@ -44,12 +51,18 @@ class DragOverlay(QWidget):
         rect = QRect(self._start, end).normalized()
         self.hide()
         if rect.width() > 4 and rect.height() > 4:
+            logger.info(
+                "DragOverlay selection_made w=%s h=%s",
+                rect.width(),
+                rect.height(),
+            )
             self.selection_made.emit(rect)
         self._start = None
         self._current = None
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_Escape:
+            logger.info("DragOverlay dismissed via Escape")
             self._start = None
             self.hide()
 
