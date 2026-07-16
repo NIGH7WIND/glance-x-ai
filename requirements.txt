@@ -1,0 +1,6 @@
+PyQt6
+mss
+Pillow
+pynput
+httpx
+qasync
