@@ -41,11 +41,19 @@ class App:
         self.spotlight.query_submitted.connect(self._on_query_submitted)
         self.spotlight.dismissed.connect(self._cancel_active_task)
 
+        # Hotkey(s)
         self._bridge = _HotkeyBridge()
         self._bridge.triggered.connect(self._show_drag_overlay)
-        self.hotkey = HotkeyListener(self._bridge.triggered.emit)
+        self.hotkey = HotkeyListener(self._bridge.triggered.emit, config.HOTKEY)
+
+        self._exit_bridge = _HotkeyBridge()
+        self._exit_bridge.triggered.connect(self.shutdown)
+        self.exit_hotkey = HotkeyListener(
+            self._exit_bridge.triggered.emit, config.EXIT_HOTKEY
+        )
 
         self._active_task: asyncio.Task | None = None
+        self._shutting_down = False
 
     def _cancel_active_task(self):
         if self._active_task is not None and not self._active_task.done():
@@ -53,6 +61,56 @@ class App:
             self._active_task.cancel()
         self._active_task = None
         self._streaming = False
+
+    def shutdown(self):
+        """Graceful exit hotkey."""
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+
+        logger.info("Shutdown initiated (exit hotkey pressed)")
+        # Run async shutdown on the qasync/asyncio loop so HTTP streams can close cleanly.
+        asyncio.ensure_future(self._shutdown_async())
+
+    async def _shutdown_async(self):
+        # Stop any in-flight asyncio work
+        self._cancel_active_task()
+
+        # Hide any overlays (Qt widgets)
+        try:
+            self.drag_overlay.hide()
+        except Exception:
+            logger.exception("Failed hiding drag_overlay")
+        try:
+            self.spotlight.hide()
+        except Exception:
+            logger.exception("Failed hiding spotlight")
+
+        # Stop hotkey listeners (pynput threads)
+        try:
+            self.hotkey.stop()
+        except Exception:
+            logger.exception("Failed stopping hotkey listener")
+        try:
+            self.exit_hotkey.stop()
+        except Exception:
+            logger.exception("Failed stopping exit hotkey listener")
+
+        # Let the active streaming task cancellation/cleanup finish.
+        # Avoid mass-cancelling all tasks (can trigger anyio/httpcore shutdown while the loop is already stopping).
+        try:
+            if self._active_task is not None:
+                await asyncio.shield(self._active_task)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Error while awaiting cancelled streaming task")
+
+        # Quit the Qt app; qasync/Qt will unwind the loop cleanly.
+        try:
+            self.qt_app.quit()
+        except Exception:
+            logger.exception("Failed calling qt_app.quit()")
 
     def _show_drag_overlay(self):
         logger.info("Hotkey received: showing drag overlay")
@@ -129,8 +187,9 @@ class App:
             logger.exception("Follow-up failed")
 
     def run(self):
-        logger.info("App run: starting hotkey listener")
+        logger.info("App run: starting hotkey listeners")
         self.hotkey.start()
+        self.exit_hotkey.start()
         with self.loop:
             self.loop.run_forever()
 

@@ -1,4 +1,5 @@
 HOTKEY = "<ctrl>+<alt>+<space>"
+EXIT_HOTKEY = "<ctrl>+<alt>+-"
 
 LLAMA_SERVER_URL = "http://localhost:8080/v1/chat/completions"
 MODEL_NAME = "gemma-4-e4b-it"
