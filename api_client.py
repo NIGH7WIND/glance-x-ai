@@ -1,6 +1,7 @@
 import json
 import httpx
 import config
+import asyncio
 
 
 class Conversation:

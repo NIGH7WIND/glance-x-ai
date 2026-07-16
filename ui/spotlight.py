@@ -33,7 +33,7 @@ class Spotlight(QWidget):
         self.scroll_area.setWidgetResizable(True)
         
         # --- SIZE ADJUSTMENTS ---
-        self.scroll_area.setMinimumHeight(50)  # Ensures it never looks like a tiny slit
+        self.scroll_area.setMinimumHeight(100)  # Ensures it never looks like a tiny slit
         self.scroll_area.setMaximumHeight(500)  # Increased from 320 to allow more text
         # ------------------------
         
