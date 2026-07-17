@@ -73,7 +73,8 @@ class App:
         asyncio.ensure_future(self._shutdown_async())
 
     async def _shutdown_async(self):
-        # Stop any in-flight asyncio work
+        # Stop any in-flight asyncio work (keep a reference before it's cleared)
+        task = self._active_task
         self._cancel_active_task()
 
         # Hide any overlays (Qt widgets)
@@ -97,10 +98,9 @@ class App:
             logger.exception("Failed stopping exit hotkey listener")
 
         # Let the active streaming task cancellation/cleanup finish.
-        # Avoid mass-cancelling all tasks (can trigger anyio/httpcore shutdown while the loop is already stopping).
         try:
-            if self._active_task is not None:
-                await asyncio.shield(self._active_task)
+            if task is not None:
+                await asyncio.shield(task)
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -111,7 +111,7 @@ class App:
             self.qt_app.quit()
         except Exception:
             logger.exception("Failed calling qt_app.quit()")
-
+            
     def _show_drag_overlay(self):
         logger.info("Hotkey received: showing drag overlay")
         virtual_geometry = self.qt_app.primaryScreen().virtualGeometry()
@@ -154,9 +154,10 @@ class App:
             logger.info("Summary task cancelled")
             self._streaming = False
             raise
-        except Exception:
+        except Exception as e:
             self._streaming = False
             logger.exception("Summary failed")
+            self.spotlight.show_error(str(e))
 
     def _on_query_submitted(self, text: str):
         if self.conversation is None:

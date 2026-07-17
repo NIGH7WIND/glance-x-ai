@@ -61,6 +61,13 @@ async def stream_reply(conversation: Conversation, on_token):
             logger.info("stream_reply: http status=%s", resp.status_code)
 
             try:
+                resp.raise_for_status()
+            except httpx.HTTPStatusError:
+                body = await resp.aread()
+                logger.error("stream_reply: HTTP error status=%s body=%r", resp.status_code, body[:500])
+                raise
+
+            try:
                 async for line in resp.aiter_lines():
                     if not line.startswith("data: "):
                         continue
@@ -68,6 +75,7 @@ async def stream_reply(conversation: Conversation, on_token):
                     data = line[len("data: ") :]
                     if data.strip() == "[DONE]":
                         logger.info("stream_reply: received [DONE]")
+                        await resp.aclose()
                         break
 
                     try:

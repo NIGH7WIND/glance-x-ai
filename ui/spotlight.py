@@ -114,3 +114,11 @@ class Spotlight(QWidget):
             logger.info("Spotlight dismissed via Escape")
             self.hide()
             self.dismissed.emit()
+
+    def show_error(self, message: str):
+        if self.summary_label.text() == "...":
+            self.summary_label.setText("")
+        self.summary_label.setText(
+            self.summary_label.text() + f"\n\n[Error: {message}]"
+        )
+        self.adjustSize()
