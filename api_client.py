@@ -125,7 +125,12 @@ async def _stream_request(payload: dict, on_token):
 
 async def stream_reply_with_tools(conversation: Conversation, on_token, status_callback=None):
     """
-    Handles streaming responses with agentic tool calling support.
+    Handles streaming responses with a true agentic tool-calling loop.
+
+    The model may perform multiple consecutive web searches autonomously.
+    Each iteration sends the full conversation WITH tools declared, executes
+    any requested tool calls, appends results, and loops again until the model
+    produces a final answer (no tool calls) or the iteration cap is reached.
     """
     payload = {
         "model": config.MODEL_NAME,
@@ -134,16 +139,29 @@ async def stream_reply_with_tools(conversation: Conversation, on_token, status_c
         "tools": [WEB_SEARCH_TOOL]
     }
 
-    logger.info("stream_reply_with_tools: starting initial model turn")
-    full_text, tool_calls, finish_reason = await _stream_request(payload, on_token)
+    iterations = 0
 
-    # Check if the model requested tool calls
-    if finish_reason == "tool_calls" or tool_calls:
+    while iterations < config.MAX_TOOL_ITERATIONS:
+        iterations += 1
+        logger.info("stream_reply_with_tools: model turn %s/%s", iterations, config.MAX_TOOL_ITERATIONS)
+
+        full_text, tool_calls, finish_reason = await _stream_request(payload, on_token)
+
+        # Model produced the final answer (no tool calls requested)
+        if not tool_calls and finish_reason != "tool_calls":
+            conversation.add_assistant_text(full_text)
+            if status_callback:
+                status_callback("")  # Clear status line
+            logger.info("stream_reply_with_tools: final answer received after %s iteration(s)", iterations)
+            return full_text
+
+        # Model requested tool calls — record the assistant tool_calls message
         assistant_msg = {"role": "assistant", "tool_calls": tool_calls}
         if full_text:
             assistant_msg["content"] = full_text
         conversation.messages.append(assistant_msg)
 
+        # Execute each requested tool call
         for tc in tool_calls:
             fn_name = tc["function"]["name"]
             raw_args = tc["function"]["arguments"]
@@ -156,30 +174,39 @@ async def stream_reply_with_tools(conversation: Conversation, on_token, status_c
                 except json.JSONDecodeError:
                     query = raw_args.strip()
 
+                # Guard against empty/malformed queries: return a helpful
+                # tool result so the model can retry with a proper query
+                # instead of hitting the search API with an empty string.
+                if not query or not query.strip():
+                    logger.warning("stream_reply_with_tools: empty web_search query from model, skipping")
+                    conversation.add_tool_result(
+                        call_id,
+                        fn_name,
+                        "Error: The web_search query was empty. Please provide a specific, non-empty search query.",
+                    )
+                    continue
+
                 if status_callback:
                     status_callback(f"🔍 Searching: {query}...")
 
                 search_result = await web_search.search(query)
                 conversation.add_tool_result(call_id, fn_name, search_result)
 
-        # Second POST request (without tools declared) to generate the final response
+        # Clear status line before next model turn
         if status_callback:
-            status_callback("")  # Clear status line
+            status_callback("")
 
-        second_payload = {
-            "model": config.MODEL_NAME,
-            "messages": conversation.messages,
-            "stream": True,
-        }
-
-        logger.info("stream_reply_with_tools: starting second model turn following tool execution")
-        final_text, _, _ = await _stream_request(second_payload, on_token)
-        conversation.add_assistant_text(final_text)
-        return final_text
-
-    # No tool execution was required
-    conversation.add_assistant_text(full_text)
-    return full_text
+    # Iteration cap reached — force a final answer without tools to avoid
+    # an infinite loop and to stay within the context window.
+    logger.warning("stream_reply_with_tools: reached MAX_TOOL_ITERATIONS=%s, forcing final answer", config.MAX_TOOL_ITERATIONS)
+    force_payload = {
+        "model": config.MODEL_NAME,
+        "messages": conversation.messages,
+        "stream": True,
+    }
+    final_text, _, _ = await _stream_request(force_payload, on_token)
+    conversation.add_assistant_text(final_text)
+    return final_text
 
 
 async def stream_reply(conversation: Conversation, on_token, status_callback=None):
