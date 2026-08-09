@@ -142,7 +142,7 @@ class App:
             self.conversation = Conversation(full_b64, crop_b64)
 
             self._streaming = True
-            await stream_reply(self.conversation, self.spotlight.append_summary_token)
+            await stream_reply(self.conversation, self.spotlight.append_summary_token,status_callback=self.spotlight.show_status)
             self._streaming = False
             logger.info("Summary stream finished")
 
@@ -177,7 +177,7 @@ class App:
             self.spotlight.summary_label.setText(self.spotlight.summary_label.text() + "\n\n")
             self._streaming = True
             logger.info("Follow-up stream started (len=%s)", len(text))
-            await stream_reply(self.conversation, self.spotlight.append_summary_token)
+            await stream_reply(self.conversation, self.spotlight.append_summary_token,status_callback=self.spotlight.show_status)
             self._streaming = False
             logger.info("Follow-up stream finished")
         except asyncio.CancelledError:

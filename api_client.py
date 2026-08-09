@@ -6,8 +6,28 @@ import httpx
 from httpx_sse import aconnect_sse
 
 import config
+import web_search
 
 logger = logging.getLogger("overlay_assistant.api_client")
+
+# Define OpenAI-compatible web search tool declaration
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Searches the web for up-to-date information, news, current events, or real-time data.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The search query to execute."
+                }
+            },
+            "required": ["query"]
+        }
+    }
+}
 
 
 class Conversation:
@@ -33,62 +53,148 @@ class Conversation:
     def add_assistant_text(self, text: str):
         self.messages.append({"role": "assistant", "content": text})
 
+    def add_tool_result(self, tool_call_id: str, name: str, result: str):
+        self.messages.append({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "content": result
+        })
 
-async def stream_reply(conversation: Conversation, on_token):
+
+async def _stream_request(payload: dict, on_token):
     """
-    Streams the model's reply for the current conversation state.
-    on_token(str) is called for each incoming text chunk.
-    Returns the full assembled text.
+    Helper function to send streaming POST request to llama.cpp server,
+    accumulate content or tool call deltas, and return final completion status.
+    """
+    full_text = ""
+    tool_calls_acc = {}
+    finish_reason = None
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        async with aconnect_sse(client, "POST", config.LLAMA_SERVER_URL, json=payload) as event_source:
+            logger.info("_stream_request: http status=%s", event_source.response.status_code)
+            event_source.response.raise_for_status()
+
+            async for event in event_source.aiter_sse():
+                if event.data == "[DONE]":
+                    logger.info("_stream_request: received [DONE]")
+                    continue
+
+                try:
+                    chunk = json.loads(event.data)
+                    choice = chunk.get("choices", [{}])[0]
+                    delta = choice.get("delta", {})
+                    
+                    if choice.get("finish_reason"):
+                        finish_reason = choice.get("finish_reason")
+
+                    # Handle standard text content
+                    content = delta.get("content", "")
+                    if content:
+                        full_text += content
+                        if on_token:
+                            on_token(content)
+
+                    # Accumulate tool calls deltas
+                    tool_calls_delta = delta.get("tool_calls", [])
+                    for tc in tool_calls_delta:
+                        idx = tc.get("index", 0)
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": tc.get("id", f"call_{idx}"),
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""}
+                            }
+                        if tc.get("id"):
+                            tool_calls_acc[idx]["id"] = tc["id"]
+                        
+                        fn = tc.get("function", {})
+                        if fn.get("name"):
+                            tool_calls_acc[idx]["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            tool_calls_acc[idx]["function"]["arguments"] += fn["arguments"]
+
+                except Exception:
+                    logger.exception("_stream_request: failed parsing stream chunk: %r", event.data[:300])
+                    continue
+
+    assembled_tool_calls = [v for k, v in sorted(tool_calls_acc.items())]
+    return full_text, assembled_tool_calls, finish_reason
+
+
+async def stream_reply_with_tools(conversation: Conversation, on_token, status_callback=None):
+    """
+    Handles streaming responses with agentic tool calling support.
     """
     payload = {
         "model": config.MODEL_NAME,
         "messages": conversation.messages,
         "stream": True,
+        "tools": [WEB_SEARCH_TOOL]
     }
-    full_text = ""
 
-    message_count = len(conversation.messages)
-    logger.info(
-        "stream_reply: start model=%s messages=%s url=%s",
-        config.MODEL_NAME,
-        message_count,
-        config.LLAMA_SERVER_URL,
-    )
+    logger.info("stream_reply_with_tools: starting initial model turn")
+    full_text, tool_calls, finish_reason = await _stream_request(payload, on_token)
 
-    async with httpx.AsyncClient(timeout=None) as client:
-        try:
-            async with aconnect_sse(client, "POST", config.LLAMA_SERVER_URL, json=payload) as event_source:
-                logger.info("stream_reply: http status=%s", event_source.response.status_code)
-                event_source.response.raise_for_status()
+    # Check if the model requested tool calls
+    if finish_reason == "tool_calls" or tool_calls:
+        assistant_msg = {"role": "assistant", "tool_calls": tool_calls}
+        if full_text:
+            assistant_msg["content"] = full_text
+        conversation.messages.append(assistant_msg)
 
-                async for event in event_source.aiter_sse():
-                    if event.data == "[DONE]":
-                        logger.info("stream_reply: received [DONE]")
-                        continue  # let the generator exhaust naturally; break causes httpcore GeneratorExit warning
+        for tc in tool_calls:
+            fn_name = tc["function"]["name"]
+            raw_args = tc["function"]["arguments"]
+            call_id = tc["id"]
 
-                    try:
-                        chunk = json.loads(event.data)
-                        delta = (
-                            chunk.get("choices", [{}])[0]
-                            .get("delta", {})
-                            .get("content", "")
-                        )
-                    except Exception:
-                        logger.exception("stream_reply: failed parsing stream chunk: %r", event.data[:300])
-                        continue
+            if fn_name == "web_search":
+                try:
+                    args = json.loads(raw_args)
+                    query = args.get("query", "")
+                except json.JSONDecodeError:
+                    query = raw_args.strip()
 
-                    if delta:
-                        full_text += delta
-                        on_token(delta)
+                if status_callback:
+                    status_callback(f"🔍 Searching: {query}...")
 
-        except asyncio.CancelledError:
-            logger.info("stream_reply: cancelled")
-            raise
+                search_result = await web_search.search(query)
+                conversation.add_tool_result(call_id, fn_name, search_result)
 
-        except Exception:
-            logger.exception("stream_reply: streaming failed")
-            raise
+        # Second POST request (without tools declared) to generate the final response
+        if status_callback:
+            status_callback("")  # Clear status line
 
+        second_payload = {
+            "model": config.MODEL_NAME,
+            "messages": conversation.messages,
+            "stream": True,
+        }
+
+        logger.info("stream_reply_with_tools: starting second model turn following tool execution")
+        final_text, _, _ = await _stream_request(second_payload, on_token)
+        conversation.add_assistant_text(final_text)
+        return final_text
+
+    # No tool execution was required
     conversation.add_assistant_text(full_text)
-    logger.info("stream_reply: done full_text_len=%s", len(full_text))
+    return full_text
+
+
+async def stream_reply(conversation: Conversation, on_token, status_callback=None):
+    """
+    Entry point for generating replies. Delegates to tool loop if WEB_SEARCH_ENABLED.
+    """
+    if config.WEB_SEARCH_ENABLED:
+        return await stream_reply_with_tools(conversation, on_token, status_callback)
+
+    # Fallback to pure streaming if web search is globally disabled
+    payload = {
+        "model": config.MODEL_NAME,
+        "messages": conversation.messages,
+        "stream": True,
+    }
+    full_text, _, _ = await _stream_request(payload, on_token)
+    conversation.add_assistant_text(full_text)
     return full_text

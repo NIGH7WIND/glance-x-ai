@@ -8,7 +8,7 @@ logger = logging.getLogger("overlay_assistant.ui.spotlight")
 
 
 class Spotlight(QWidget):
-    """Borderless always-on-top popup: streaming summary + follow-up input."""
+    """Borderless always-on-top popup: streaming summary + status indicator + follow-up input."""
 
     query_submitted = pyqtSignal(str)
     dismissed = pyqtSignal()
@@ -51,6 +51,13 @@ class Spotlight(QWidget):
             "background: rgba(30,30,30,220); border-radius: 8px;"
         )
 
+        # Status label for intermediate status updates (e.g., 🔍 Searching...)
+        self.status_label = QLabel("")
+        self.status_label.setStyleSheet(
+            "color: #aaa; font-size: 12px; font-style: italic; background: #1e1e24; padding: 0 4px;"
+        )
+        self.status_label.hide()
+
         self.input = QLineEdit()
         self.input.setPlaceholderText("Ask a follow-up...")
         self.input.setStyleSheet(
@@ -60,7 +67,18 @@ class Spotlight(QWidget):
         self.input.returnPressed.connect(self._on_submit)
 
         layout.addWidget(self.scroll_area)
+        layout.addWidget(self.status_label)
         layout.addWidget(self.input)
+
+    def show_status(self, msg: str):
+        """Displays or hides a dimmed status message above the input box."""
+        if msg:
+            self.status_label.setText(msg)
+            self.status_label.show()
+        else:
+            self.status_label.setText("")
+            self.status_label.hide()
+        self.adjustSize()
 
     def _on_submit(self):
         text = self.input.text().strip()
@@ -72,13 +90,13 @@ class Spotlight(QWidget):
     def open_at(self, x: int, y: int, screen_geometry=None):
         self._logged_stream_start = False
         self.summary_label.setText("...")
+        self.show_status("")
         self.adjustSize()
         logger.info("Spotlight open_at x=%s y=%s", x, y)
 
         if screen_geometry is not None:
             margin = 12
             w = self.width()
-            # Updated height calculation to respect the new larger sizes
             h = min(self.sizeHint().height(), 600)  
             max_x = screen_geometry.right() - w - margin
             max_y = screen_geometry.bottom() - h - margin
@@ -92,6 +110,10 @@ class Spotlight(QWidget):
         QTimer.singleShot(0, self.input.setFocus)
 
     def append_summary_token(self, token: str):
+        # Automatically clear status indicator once streaming of the final response begins
+        if self.status_label.isVisible():
+            self.show_status("")
+
         if self.summary_label.text() == "...":
             self.summary_label.setText("")
             if not self._logged_stream_start:
@@ -114,6 +136,7 @@ class Spotlight(QWidget):
             self.dismissed.emit()
 
     def show_error(self, message: str):
+        self.show_status("")
         if self.summary_label.text() == "...":
             self.summary_label.setText("")
         self.summary_label.setText(
