@@ -8,13 +8,8 @@
 
 - 🔥 **Instant AI summaries** — drag-select any region of the screen and get a context-aware answer in seconds
 - 🖼️ **Full-screen context** — the model sees both your highlighted crop _and_ the entire screen to infer what you're actually doing
-- 💬 **Follow-up conversations** — keep asking questions in the popup without re-selecting
 - 🌍 **Agentic web search** — optional Tavily-powered real-time search for up-to-date information (news, prices, current events)
-- 🖥️ **Multi-monitor support** — works across your entire virtual desktop
 - ⌨️ **Global hotkeys** — trigger and exit from anywhere, no window focus needed
-- ⚡ **Streaming responses** — answers appear token-by-token as they're generated
-- 🎨 **Clean, borderless overlay UI** — dimmed drag overlay + always-on-top spotlight popup
-- 🛠️ **Configurable logging** — console + optional rotating file logs
 
 ---
 
@@ -96,32 +91,6 @@ pip install -r requirements.txt
 
 ---
 
-## ⚙️ Configuration
-
-All settings live in `config.py` and can be tweaked there:
-
-| Setting                   | Default                                     | Description                                            |
-| ------------------------- | ------------------------------------------- | ------------------------------------------------------ |
-| `HOTKEY`                  | `<ctrl>+<alt>+<shift>`                      | Global hotkey to open the selection overlay            |
-| `EXIT_HOTKEY`             | `<ctrl>+<alt>+-`                            | Global hotkey to shut down the app                     |
-| `LLAMA_SERVER_URL`        | `http://localhost:8080/v1/chat/completions` | OpenAI-compatible endpoint                             |
-| `MODEL_NAME`              | `gemma-4-e4b-it`                            | Model name sent to the server                          |
-| `FULL_SCREENSHOT_MAX_DIM` | `768`                                       | Downscale target for the full-screenshot context image |
-| `CROP_MAX_DIM`            | `1024`                                      | Downscale target for the highlighted crop              |
-| `WEB_SEARCH_ENABLED`      | `True`                                      | Enable/disable agentic web search                      |
-| `WEB_SEARCH_MAX_RESULTS`  | `4`                                         | Max web results per search                             |
-
-### Environment Variables (`.env`)
-
-| Variable                        | Description                                                          |
-| ------------------------------- | -------------------------------------------------------------------- |
-| `TAVILY_API_KEY`                | Required for web search. Get one at [tavily.com](https://tavily.com) |
-| `OVERLAY_LOG_LEVEL`             | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)     |
-| `OVERLAY_LOG_FILE`              | If set, also logs to this file (rotating)                            |
-| `OVERLAY_LOG_FILE_MAX_BYTES`    | Max bytes per log file (default: `10485760` = 10MB)                  |
-| `OVERLAY_LOG_FILE_BACKUP_COUNT` | Number of backup files (default: `5`)                                |
-
----
 
 ## 🎮 Usage
 
@@ -142,41 +111,6 @@ python main.py
 6. **Dismiss** — Press `Escape` to close the popup, or `Ctrl+Alt+-` to fully exit the app.
 
 > **Web search:** When enabled, the model can autonomously trigger a web search when your question needs real-time info (indicated by a 🔍 _Searching…_ status in the popup).
-
----
-
-## 🛠️ Logging
-
-Logging is configured centrally via `logging_setup.py`:
-
-- Logs to the **console** by default
-- Set `OVERLAY_LOG_FILE` to also write to a **rotating file** (10MB default, 5 backups)
-- Control verbosity with `OVERLAY_LOG_LEVEL`
-
----
-
-## 📁 Project Structure
-
-```
-.
-├── main.py              # App entry point, Qt/qasync loop, orchestration
-├── config.py            # Central configuration & defaults
-├── capture.py           # Screen capture, cropping, downscaling
-├── api_client.py        # Streaming LLM client + tool calling
-├── web_search.py        # Tavily web search integration
-├── hotkey.py            # Global hotkey listener
-├── logging_setup.py     # Logging configuration
-├── requirements.txt     # Python dependencies
-└── ui/
-    ├── drag_overlay.py  # Fullscreen selection overlay
-    └── spotlight.py     # Result popup with streaming + follow-ups
-```
-
----
-
-## 📄 License
-
-Distributed under the MIT License. See `LICENSE` for more information.
 
 ---
 
