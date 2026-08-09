@@ -1,11 +1,11 @@
 import logging
+import logging.config
 import os
-from logging.handlers import RotatingFileHandler
 
 
 def setup_logging() -> None:
     """
-    Central logging setup.
+    Central logging setup via dictConfig.
 
     Env vars:
       - OVERLAY_LOG_LEVEL: DEBUG|INFO|WARNING|ERROR (default: INFO)
@@ -13,36 +13,63 @@ def setup_logging() -> None:
       - OVERLAY_LOG_FILE_MAX_BYTES: default 10485760 (10MB)
       - OVERLAY_LOG_FILE_BACKUP_COUNT: default 5
     """
-    log_level_str = os.getenv("OVERLAY_LOG_LEVEL", "INFO").upper().strip()
-    level = getattr(logging, log_level_str, logging.INFO)
+    level = os.getenv("OVERLAY_LOG_LEVEL", "INFO").upper().strip()
 
-    root = logging.getLogger()
-    root.setLevel(level)
-
-    formatter = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(level)
-    console_handler.setFormatter(formatter)
-    root.addHandler(console_handler)
+    handlers: dict = {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+            "level": level,
+        }
+    }
 
     log_file = os.getenv("OVERLAY_LOG_FILE")
     if log_file:
-        try:
-            max_bytes = int(os.getenv("OVERLAY_LOG_FILE_MAX_BYTES", "10485760"))
-            backup_count = int(os.getenv("OVERLAY_LOG_FILE_BACKUP_COUNT", "5"))
-            file_handler = RotatingFileHandler(
-                log_file,
-                maxBytes=max_bytes,
-                backupCount=backup_count,
-                encoding="utf-8",
-            )
-            file_handler.setLevel(level)
-            file_handler.setFormatter(formatter)
-            root.addHandler(file_handler)
-        except Exception:
-            # Don’t fail the app if file logging misconfigures.
-            root.exception("Failed to set up file logging; continuing with console only.")
+        handlers["file"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "formatter": "standard",
+            "level": level,
+            "filename": log_file,
+            "maxBytes": int(os.getenv("OVERLAY_LOG_FILE_MAX_BYTES", "10485760")),
+            "backupCount": int(os.getenv("OVERLAY_LOG_FILE_BACKUP_COUNT", "5")),
+            "encoding": "utf-8",
+        }
+
+    try:
+        logging.config.dictConfig(
+            {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "standard": {
+                        "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                    }
+                },
+                "handlers": handlers,
+                "root": {
+                    "level": level,
+                    "handlers": list(handlers),
+                },
+            }
+        )
+    except Exception:
+        # Don't fail the app if file logging misconfigures; fall back to console only.
+        handlers.pop("file", None)
+        logging.config.dictConfig(
+            {
+                "version": 1,
+                "disable_existing_loggers": False,
+                "formatters": {
+                    "standard": {
+                        "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+                        "datefmt": "%Y-%m-%d %H:%M:%S",
+                    }
+                },
+                "handlers": {"console": handlers["console"]},
+                "root": {"level": level, "handlers": ["console"]},
+            }
+        )
+        logging.getLogger(__name__).exception(
+            "Failed to set up file logging; continuing with console only."
+        )
