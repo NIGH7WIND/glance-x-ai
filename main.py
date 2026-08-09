@@ -71,7 +71,7 @@ class App:
 
         logger.info("Shutdown initiated (exit hotkey pressed)")
         # Run async shutdown on the qasync/asyncio loop so HTTP streams can close cleanly.
-        asyncio.ensure_future(self._shutdown_async())
+        self.loop.create_task(self._shutdown_async())
 
     async def _shutdown_async(self):
         # Stop any in-flight asyncio work (keep a reference before it's cleared)
@@ -133,7 +133,7 @@ class App:
         screen_geo = screen.availableGeometry()
         self.spotlight.open_at(rect.left(), rect.bottom() + 8, screen_geo)
         self.conversation = None  # fresh session
-        self._active_task = asyncio.ensure_future(self._run_summary(bbox))
+        self._active_task = self.loop.create_task(self._run_summary(bbox))
 
     async def _run_summary(self, bbox):
         try:
@@ -169,7 +169,7 @@ class App:
             self._pending_query = text
             return
         logger.info("Query submitted: starting follow-up (len=%s)", len(text))
-        asyncio.ensure_future(self._run_followup(text))
+        self.loop.create_task(self._run_followup(text))
 
     async def _run_followup(self, text: str):
         try:
