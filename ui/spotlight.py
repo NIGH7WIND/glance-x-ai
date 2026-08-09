@@ -48,13 +48,13 @@ class Spotlight(QWidget):
         
         self.scroll_area.setFrameShape(QScrollArea.Shape.NoFrame)
         self.scroll_area.setStyleSheet(
-            "background: rgba(30,30,30,220); border-radius: 8px;"
+            "background: rgba(30,30,30,245); border-radius: 8px;"
         )
 
         # Status label for intermediate status updates (e.g., 🔍 Searching...)
         self.status_label = QLabel("")
         self.status_label.setStyleSheet(
-            "color: #aaa; font-size: 12px; font-style: italic; background: #1e1e24; padding: 0 4px;"
+            "color: #aaa; font-size: 12px; font-style: italic; background: #1e1e24; padding: 2px 4px; border-radius: 4px;"
         )
         self.status_label.hide()
 

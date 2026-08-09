@@ -52,5 +52,5 @@ SUMMARY_SYSTEM_PROMPT = (
     "instead of guessing confidently.\n"
     "- Avoid LaTeX or math notation — describe formulas and symbols in plain "
     "words, since output is unformatted plain text.\n"
-    "- Default to 1-2 sentences. Only elaborate if the user asks a follow-up."
+    "- Default to 2-4 sentences. Only elaborate if the user asks a follow-up."
 )
