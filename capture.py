@@ -6,9 +6,7 @@ import mss
 from PIL import Image
 
 import config
-from logging_setup import setup_logging
 
-setup_logging()
 logger = logging.getLogger("overlay_assistant.capture")
 
 

@@ -3,9 +3,7 @@ import logging
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLineEdit, QLabel, QScrollArea
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 
-from logging_setup import setup_logging
 
-setup_logging()
 logger = logging.getLogger("overlay_assistant.ui.spotlight")
 
 

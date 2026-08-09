@@ -19,10 +19,6 @@ def setup_logging() -> None:
     root = logging.getLogger()
     root.setLevel(level)
 
-    # Avoid duplicate handlers on hot-reload / repeated setup.
-    if getattr(root, "_overlay_logging_configured", False):
-        return
-
     formatter = logging.Formatter(
         fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -50,5 +46,3 @@ def setup_logging() -> None:
         except Exception:
             # Don’t fail the app if file logging misconfigures.
             root.exception("Failed to set up file logging; continuing with console only.")
-
-    root._overlay_logging_configured = True

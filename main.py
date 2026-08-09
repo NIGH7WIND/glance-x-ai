@@ -6,6 +6,10 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QRect, QObject, pyqtSignal
 import qasync
 
+from logging_setup import setup_logging
+
+setup_logging()
+
 import config
 from hotkey import HotkeyListener
 from capture import capture_full_and_crop
@@ -13,9 +17,6 @@ from api_client import Conversation, stream_reply
 from ui.drag_overlay import DragOverlay
 from ui.spotlight import Spotlight
 
-from logging_setup import setup_logging
-
-setup_logging()
 logger = logging.getLogger("overlay_assistant")
 
 

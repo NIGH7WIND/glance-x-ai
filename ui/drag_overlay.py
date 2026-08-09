@@ -4,9 +4,7 @@ from PyQt6.QtCore import Qt, QRect, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import QWidget
 
-from logging_setup import setup_logging
 
-setup_logging()
 logger = logging.getLogger("overlay_assistant.ui.drag_overlay")
 
 

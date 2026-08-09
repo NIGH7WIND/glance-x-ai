@@ -3,9 +3,7 @@ import logging
 from pynput import keyboard
 
 import config
-from logging_setup import setup_logging
 
-setup_logging()
 logger = logging.getLogger("overlay_assistant.hotkey")
 
 
