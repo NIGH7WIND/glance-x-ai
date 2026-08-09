@@ -3,4 +3,5 @@ mss
 Pillow
 pynput
 httpx
+httpx-sse
 qasync

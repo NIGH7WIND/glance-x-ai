@@ -3,6 +3,7 @@ import json
 import logging
 
 import httpx
+from httpx_sse import aconnect_sse
 
 import config
 
@@ -55,50 +56,38 @@ async def stream_reply(conversation: Conversation, on_token):
     )
 
     async with httpx.AsyncClient(timeout=None) as client:
-        async with client.stream("POST", config.LLAMA_SERVER_URL, json=payload) as resp:
-            logger.info("stream_reply: http status=%s", resp.status_code)
+        try:
+            async with aconnect_sse(client, "POST", config.LLAMA_SERVER_URL, json=payload) as event_source:
+                logger.info("stream_reply: http status=%s", event_source.response.status_code)
+                event_source.response.raise_for_status()
 
-            try:
-                resp.raise_for_status()
-            except httpx.HTTPStatusError:
-                body = await resp.aread()
-                logger.error("stream_reply: HTTP error status=%s body=%r", resp.status_code, body[:500])
-                raise
-
-            try:
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-
-                    data = line[len("data: ") :]
-                    if data.strip() == "[DONE]":
+                async for event in event_source.aiter_sse():
+                    if event.data == "[DONE]":
                         logger.info("stream_reply: received [DONE]")
-                        await resp.aclose()
-                        break
+                        continue  # let the generator exhaust naturally; break causes httpcore GeneratorExit warning
 
                     try:
-                        chunk = json.loads(data)
+                        chunk = json.loads(event.data)
                         delta = (
                             chunk.get("choices", [{}])[0]
                             .get("delta", {})
                             .get("content", "")
                         )
                     except Exception:
-                        logger.exception("stream_reply: failed parsing stream chunk: %r", data[:300])
+                        logger.exception("stream_reply: failed parsing stream chunk: %r", event.data[:300])
                         continue
 
                     if delta:
                         full_text += delta
                         on_token(delta)
 
-            except asyncio.CancelledError:
-                logger.info("stream_reply: cancelled")
-                await resp.aclose()
-                raise
+        except asyncio.CancelledError:
+            logger.info("stream_reply: cancelled")
+            raise
 
-            except Exception:
-                logger.exception("stream_reply: streaming failed")
-                raise
+        except Exception:
+            logger.exception("stream_reply: streaming failed")
+            raise
 
     conversation.add_assistant_text(full_text)
     logger.info("stream_reply: done full_text_len=%s", len(full_text))
