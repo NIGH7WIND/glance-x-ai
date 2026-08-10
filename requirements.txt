@@ -7,3 +7,5 @@ httpx-sse
 qasync
 tavily-python
 python-dotenv
+pocket-tts
+sounddevice

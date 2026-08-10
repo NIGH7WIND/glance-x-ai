@@ -16,6 +16,7 @@ from capture import capture_full_and_crop
 from api_client import Conversation, stream_reply
 from ui.drag_overlay import DragOverlay
 from ui.spotlight import Spotlight
+from tts_engine import SpeechManager
 
 logger = logging.getLogger("overlay_assistant")
 
@@ -31,6 +32,10 @@ class App:
         self.qt_app = QApplication(sys.argv)
         self.loop = qasync.QEventLoop(self.qt_app)
         asyncio.set_event_loop(self.loop)
+
+        # Initialize TTS Engine
+        logger.info("Initializing TTS engine")
+        self.tts = SpeechManager(voice_name="alba")
 
         self.drag_overlay = DragOverlay()
         self.spotlight = Spotlight()
@@ -56,12 +61,19 @@ class App:
         self._active_task: asyncio.Task | None = None
         self._shutting_down = False
 
+    def _handle_stream_token(self, token: str):
+        """Pass incoming streaming tokens to both the UI popup and TTS engine."""
+        self.spotlight.append_summary_token(token)
+        self.tts.process_text_chunk(token)
+
     def _cancel_active_task(self):
         if self._active_task is not None and not self._active_task.done():
             logger.info("Cancelling active task")
             self._active_task.cancel()
         self._active_task = None
         self._streaming = False
+        # Stop speech playback immediately when tasks are dismissed or cancelled
+        self.tts.stop()
 
     def shutdown(self):
         """Graceful exit hotkey."""
@@ -70,11 +82,14 @@ class App:
         self._shutting_down = True
 
         logger.info("Shutdown initiated (exit hotkey pressed)")
-        # Run async shutdown on the qasync/asyncio loop so HTTP streams can close cleanly.
         self.loop.create_task(self._shutdown_async())
 
     async def _shutdown_async(self):
-        # Stop any in-flight asyncio work (keep a reference before it's cleared)
+        # Stop TTS worker thread and playback queue
+        self.tts.stop()
+        self.tts.is_running = False
+
+        # Stop any in-flight asyncio work
         task = self._active_task
         self._cancel_active_task()
 
@@ -107,12 +122,12 @@ class App:
         except Exception:
             logger.exception("Error while awaiting cancelled streaming task")
 
-        # Quit the Qt app; qasync/Qt will unwind the loop cleanly.
+        # Quit the Qt app
         try:
             self.qt_app.quit()
         except Exception:
             logger.exception("Failed calling qt_app.quit()")
-            
+
     def _show_drag_overlay(self):
         logger.info("Hotkey received: showing drag overlay")
         virtual_geometry = self.qt_app.primaryScreen().virtualGeometry()
@@ -142,7 +157,12 @@ class App:
             self.conversation = Conversation(full_b64, crop_b64)
 
             self._streaming = True
-            await stream_reply(self.conversation, self.spotlight.append_summary_token,status_callback=self.spotlight.show_status)
+            await stream_reply(
+                self.conversation,
+                self._handle_stream_token,
+                status_callback=self.spotlight.show_status,
+            )
+            self.tts.finalize()  # Flush remaining sentence buffer
             self._streaming = False
             logger.info("Summary stream finished")
 
@@ -154,9 +174,11 @@ class App:
         except asyncio.CancelledError:
             logger.info("Summary task cancelled")
             self._streaming = False
+            self.tts.stop()
             raise
         except Exception as e:
             self._streaming = False
+            self.tts.stop()
             logger.exception("Summary failed")
             self.spotlight.show_error(str(e))
 
@@ -174,18 +196,27 @@ class App:
     async def _run_followup(self, text: str):
         try:
             self.conversation.add_user_text(text)
-            self.spotlight.summary_label.setText(self.spotlight.summary_label.text() + "\n\n")
+            self.spotlight.summary_label.setText(
+                self.spotlight.summary_label.text() + "\n\n"
+            )
             self._streaming = True
             logger.info("Follow-up stream started (len=%s)", len(text))
-            await stream_reply(self.conversation, self.spotlight.append_summary_token,status_callback=self.spotlight.show_status)
+            await stream_reply(
+                self.conversation,
+                self._handle_stream_token,
+                status_callback=self.spotlight.show_status,
+            )
+            self.tts.finalize()  # Flush remaining sentence buffer
             self._streaming = False
             logger.info("Follow-up stream finished")
         except asyncio.CancelledError:
             logger.info("Follow-up task cancelled")
             self._streaming = False
+            self.tts.stop()
             raise
         except Exception:
             self._streaming = False
+            self.tts.stop()
             logger.exception("Follow-up failed")
 
     def run(self):
