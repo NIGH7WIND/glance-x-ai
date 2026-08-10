@@ -9,6 +9,7 @@
 - 🔥 **Instant AI summaries** — drag-select any region of the screen and get a context-aware answer in seconds
 - 🖼️ **Full-screen context** — the model sees both your highlighted crop _and_ the entire screen to infer what you're actually doing
 - 🌍 **Agentic web search** — optional Tavily-powered real-time search for up-to-date information (news, prices, current events)
+- 🗣️ **Streaming Text-to-Speech** — hear the AI's response spoken aloud as it streams.
 - ⌨️ **Global hotkeys** — trigger and exit from anywhere, no window focus needed
 
 ---
@@ -20,7 +21,7 @@
 3. **Capture** — GlanceXAi captures the full screenshot _and_ your highlighted crop, downscaling both for efficient context.
 4. **Analyze** — A local vision-language model (llama.cpp) receives both images and infers what task you're in the middle of.
 5. **Stream** — A focused, actionable answer streams into a borderless "Spotlight" popup next to your selection.
-6. **Follow-up** — Ask a follow-up question right in the popup to dig deeper. The conversation stays in context.
+6. **Follow-up** — Ask a follow-up question right in the popup to dig deeper. The conversation stays in context, and the response is spoken aloud.
 
 ---
 
@@ -31,16 +32,33 @@
 │  hotkey.py  │──▶│  ui/drag_overlay │──▶│    capture.py    │
 │  (pynput)   │   │   (selection)    │   │ (screen + crop)  │
 └─────────────┘   └──────────────────┘   └────────┬─────────┘
-                                                   ▼
-┌─────────────┐   ┌──────────────────┐   ┌──────────────────┐
-│ ui/spotlight│◀──│   api_client.py  │◀──│  (llama.cpp via  │
-│  (popup)    │   │ (streaming +     │   │   OpenAI API)    │
-│             │   │  tool calling)   │   └──────────────────┘
-└─────────────┘   └────────┬─────────┘
-                           ▼
-                   ┌──────────────────┐
-                   │   web_search.py  │  (Tavily, optional)
-                   └──────────────────┘
+                           │                      ▼
+                           │             ┌──────────────────┐
+                           │             │  (llama.cpp via  │
+                           │             │   OpenAI API)    │
+                           │             └──────────────────┘
+                           │                      ▲
+                           │                      │
+                           │             ┌──────────────────┐
+                           │             │   web_search.py  │  (Tavily, optional)
+                           │             └──────────────────┘
+                           │                      ▲
+                           │                      │
+        ┌──────────────────┐   ┌────────┴─────────┐
+        │     main.py      │──▶│   api_client.py  │
+        │ (orchestration)  │   │ (streaming +     │
+        │                  │   │  tool calling)   │
+        └────────┬─────────┘   └──────────────────┘
+                 │
+                 ├───────────────────▶ ┌──────────────────┐
+                 │                   │ │ ui/spotlight     │
+                 │                   │ │  (text output)   │
+                 │                   └─┴──────────────────┘
+                 │
+                 └───────────────────▶ ┌──────────────────┐
+                                     │ │   tts_engine.py  │
+                                     │ │ (audio playback) │
+                                     └─┴──────────────────┘
 ```
 
 - **`main.py`** — App bootstrap, Qt + qasync event loop, hotkey wiring, task orchestration
@@ -90,7 +108,6 @@ pip install -r requirements.txt
 > **Note:** GlanceXAi expects the llama.cpp server at `http://localhost:8080/v1/chat/completions` by default. You can change this in `config.py`.
 
 ---
-
 
 ## 🎮 Usage
 
