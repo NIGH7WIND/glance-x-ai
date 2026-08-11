@@ -85,9 +85,8 @@ class App:
         self.loop.create_task(self._shutdown_async())
 
     async def _shutdown_async(self):
-        # Stop TTS worker thread and playback queue
-        self.tts.stop()
-        self.tts.is_running = False
+        # Stop TTS worker threads (generation + playback) and playback queue
+        self.tts.shutdown()
 
         # Stop any in-flight asyncio work
         task = self._active_task
