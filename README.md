@@ -8,7 +8,7 @@
 
 - 🔥 **Instant AI summaries** — drag-select any screen region for a context-aware answer
 - 🖼️ **Full-screen context** — the model sees both your crop and the full screenshot to infer what you're doing
-- 🌍 **Agentic web search** — optional Tavily-powered search for real-time info
+- 🌍 **Agentic web search** — Tavily-powered search for real-time info
 - 🗣️ **Streaming text-to-speech** — the response is spoken aloud as it streams
 - ⌨️ **Global hotkeys** — trigger and dismiss from anywhere, no window focus needed
 

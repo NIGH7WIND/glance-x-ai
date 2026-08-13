@@ -1,33 +1,44 @@
 import asyncio
 import json
 import logging
+from typing import Optional, Tuple, List, Any
 
-import httpx
-from httpx_sse import aconnect_sse
+from openai import AsyncOpenAI
+from pydantic import BaseModel, Field
 
 import config
 import web_search
 
 logger = logging.getLogger("overlay_assistant.api_client")
 
-# Define OpenAI-compatible web search tool declaration
-WEB_SEARCH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "Searches the web for up-to-date information, news, current events, or real-time data.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query to execute."
-                }
-            },
-            "required": ["query"]
+
+class WebSearchArgs(BaseModel):
+    """Pydantic model defining arguments for the web_search tool."""
+    query: str = Field(description="The search query to execute.")
+
+
+def _build_web_search_tool() -> dict:
+    """
+    Constructs the OpenAI tool declaration dict using Pydantic.
+    Strips 'title' attributes to ensure compatibility with local GGUF model templates.
+    """
+    schema = WebSearchArgs.model_json_schema()
+    schema.pop("title", None)
+    for prop in schema.get("properties", {}).values():
+        if isinstance(prop, dict):
+            prop.pop("title", None)
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "web_search",
+            "description": "Searches the web for up-to-date information, news, current events, or real-time data.",
+            "parameters": schema
         }
     }
-}
+
+
+WEB_SEARCH_TOOL = _build_web_search_tool()
 
 
 class Conversation:
@@ -62,92 +73,101 @@ class Conversation:
         })
 
 
-async def _stream_request(payload: dict, on_token):
+async def _stream_request(
+    messages: List[dict],
+    tools: Optional[List[dict]] = None,
+    on_token=None
+) -> Tuple[str, List[dict], Optional[str]]:
     """
-    Helper function to send streaming POST request to llama.cpp server,
-    accumulate content or tool call deltas, and return final completion status.
+    Sends a streaming POST request to llama.cpp server via AsyncOpenAI client SDK,
+    accumulates text content or tool call deltas, and returns the aggregated response.
     """
+    # Normalize base_url for AsyncOpenAI client
+    base_url = config.LLAMA_SERVER_URL
+    if base_url.endswith("/chat/completions"):
+        base_url = base_url[:-len("/chat/completions")]
+
+    client = AsyncOpenAI(base_url=base_url, api_key="llama.cpp")
+
+    kwargs: dict[str, Any] = {
+        "model": config.MODEL_NAME,
+        "messages": messages,
+        "stream": True,
+    }
+    if tools:
+        kwargs["tools"] = tools
+
     full_text = ""
-    tool_calls_acc = {}
+    tool_calls_acc: dict[int, dict] = {}
     finish_reason = None
 
-    async with httpx.AsyncClient(timeout=None) as client:
-        async with aconnect_sse(client, "POST", config.LLAMA_SERVER_URL, json=payload) as event_source:
-            logger.info("_stream_request: http status=%s", event_source.response.status_code)
-            event_source.response.raise_for_status()
+    try:
+        response_stream = await client.chat.completions.create(**kwargs)
+        async for chunk in response_stream:
+            if not chunk.choices:
+                continue
 
-            async for event in event_source.aiter_sse():
-                if event.data == "[DONE]":
-                    logger.info("_stream_request: received [DONE]")
-                    continue
+            choice = chunk.choices[0]
+            if choice.finish_reason:
+                finish_reason = choice.finish_reason
 
-                try:
-                    chunk = json.loads(event.data)
-                    choice = chunk.get("choices", [{}])[0]
-                    delta = choice.get("delta", {})
-                    
-                    if choice.get("finish_reason"):
-                        finish_reason = choice.get("finish_reason")
+            delta = choice.delta
+            if not delta:
+                continue
 
-                    # Handle standard text content
-                    content = delta.get("content", "")
-                    if content:
-                        full_text += content
-                        if on_token:
-                            on_token(content)
+            # Standard text content
+            if delta.content:
+                full_text += delta.content
+                if on_token:
+                    on_token(delta.content)
 
-                    # Accumulate tool calls deltas
-                    tool_calls_delta = delta.get("tool_calls", [])
-                    for tc in tool_calls_delta:
-                        idx = tc.get("index", 0)
-                        if idx not in tool_calls_acc:
-                            tool_calls_acc[idx] = {
-                                "id": tc.get("id", f"call_{idx}"),
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""}
-                            }
-                        if tc.get("id"):
-                            tool_calls_acc[idx]["id"] = tc["id"]
-                        
-                        fn = tc.get("function", {})
-                        if fn.get("name"):
-                            tool_calls_acc[idx]["function"]["name"] += fn["name"]
-                        if fn.get("arguments"):
-                            tool_calls_acc[idx]["function"]["arguments"] += fn["arguments"]
+            # Accumulate streaming tool calls
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {
+                            "id": tc.id or f"call_{idx}",
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""}
+                        }
+                    if tc.id:
+                        tool_calls_acc[idx]["id"] = tc.id
 
-                except Exception:
-                    logger.exception("_stream_request: failed parsing stream chunk: %r", event.data[:300])
-                    continue
+                    if tc.function:
+                        if tc.function.name:
+                            tool_calls_acc[idx]["function"]["name"] += tc.function.name
+                        if tc.function.arguments:
+                            tool_calls_acc[idx]["function"]["arguments"] += tc.function.arguments
+
+    except Exception:
+        logger.exception("_stream_request: Failed during OpenAI streaming completion")
+        raise
+    finally:
+        await client.close()
 
     assembled_tool_calls = [v for k, v in sorted(tool_calls_acc.items())]
     return full_text, assembled_tool_calls, finish_reason
 
 
-async def stream_reply_with_tools(conversation: Conversation, on_token, status_callback=None):
+async def stream_reply_with_tools(conversation: Conversation, on_token, status_callback=None) -> str:
     """
-    Handles streaming responses with a true agentic tool-calling loop.
-
-    The model may perform multiple consecutive web searches autonomously.
-    Each iteration sends the full conversation WITH tools declared, executes
-    any requested tool calls, appends results, and loops again until the model
-    produces a final answer (no tool calls) or the iteration cap is reached.
+    Handles streaming responses with an agentic tool-calling loop.
+    Supports multi-turn tool calling compatible with local GGUF model templates.
     """
-    payload = {
-        "model": config.MODEL_NAME,
-        "messages": conversation.messages,
-        "stream": True,
-        "tools": [WEB_SEARCH_TOOL]
-    }
-
     iterations = 0
 
     while iterations < config.MAX_TOOL_ITERATIONS:
         iterations += 1
         logger.info("stream_reply_with_tools: model turn %s/%s", iterations, config.MAX_TOOL_ITERATIONS)
 
-        full_text, tool_calls, finish_reason = await _stream_request(payload, on_token)
+        full_text, tool_calls, finish_reason = await _stream_request(
+            conversation.messages,
+            tools=[WEB_SEARCH_TOOL],
+            on_token=on_token,
+        )
 
-        # Model produced the final answer (no tool calls requested)
+        # Model produced final answer (no tool calls requested)
         if not tool_calls and finish_reason != "tool_calls":
             conversation.add_assistant_text(full_text)
             if status_callback:
@@ -155,10 +175,12 @@ async def stream_reply_with_tools(conversation: Conversation, on_token, status_c
             logger.info("stream_reply_with_tools: final answer received after %s iteration(s)", iterations)
             return full_text
 
-        # Model requested tool calls — record the assistant tool_calls message
-        assistant_msg = {"role": "assistant", "tool_calls": tool_calls}
-        if full_text:
-            assistant_msg["content"] = full_text
+        # Record assistant tool_calls message
+        assistant_msg = {
+            "role": "assistant",
+            "content": full_text if full_text else None,
+            "tool_calls": tool_calls
+        }
         conversation.messages.append(assistant_msg)
 
         # Execute each requested tool call
@@ -174,9 +196,6 @@ async def stream_reply_with_tools(conversation: Conversation, on_token, status_c
                 except json.JSONDecodeError:
                     query = raw_args.strip()
 
-                # Guard against empty/malformed queries: return a helpful
-                # tool result so the model can retry with a proper query
-                # instead of hitting the search API with an empty string.
                 if not query or not query.strip():
                     logger.warning("stream_reply_with_tools: empty web_search query from model, skipping")
                     conversation.add_tool_result(
@@ -191,37 +210,38 @@ async def stream_reply_with_tools(conversation: Conversation, on_token, status_c
 
                 search_result = await web_search.search(query)
                 conversation.add_tool_result(call_id, fn_name, search_result)
+            else:
+                conversation.add_tool_result(
+                    call_id,
+                    fn_name,
+                    f"Error: Unrecognized tool '{fn_name}'.",
+                )
 
-        # Clear status line before next model turn
         if status_callback:
             status_callback("")
 
-    # Iteration cap reached — force a final answer without tools to avoid
-    # an infinite loop and to stay within the context window.
+    # Iteration cap reached — force final answer without tools
     logger.warning("stream_reply_with_tools: reached MAX_TOOL_ITERATIONS=%s, forcing final answer", config.MAX_TOOL_ITERATIONS)
-    force_payload = {
-        "model": config.MODEL_NAME,
-        "messages": conversation.messages,
-        "stream": True,
-    }
-    final_text, _, _ = await _stream_request(force_payload, on_token)
+    final_text, _, _ = await _stream_request(
+        conversation.messages,
+        tools=None,
+        on_token=on_token,
+    )
     conversation.add_assistant_text(final_text)
     return final_text
 
 
-async def stream_reply(conversation: Conversation, on_token, status_callback=None):
+async def stream_reply(conversation: Conversation, on_token, status_callback=None) -> str:
     """
     Entry point for generating replies. Delegates to tool loop if WEB_SEARCH_ENABLED.
     """
     if config.WEB_SEARCH_ENABLED:
         return await stream_reply_with_tools(conversation, on_token, status_callback)
 
-    # Fallback to pure streaming if web search is globally disabled
-    payload = {
-        "model": config.MODEL_NAME,
-        "messages": conversation.messages,
-        "stream": True,
-    }
-    full_text, _, _ = await _stream_request(payload, on_token)
+    full_text, _, _ = await _stream_request(
+        conversation.messages,
+        tools=None,
+        on_token=on_token,
+    )
     conversation.add_assistant_text(full_text)
     return full_text

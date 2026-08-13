@@ -23,7 +23,7 @@ class SpeechManager:
     # Short filler lines played instantly on turn start to mask generation latency.
     FILLER_PHRASES = [
     "Okay, let's see,",
-    "Alright, one moment,",
+    "Alright,",
     "So, let's see,",
     "Sure, one moment,",
     "Let's take a look,",
